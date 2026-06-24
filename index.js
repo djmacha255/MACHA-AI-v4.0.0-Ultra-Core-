@@ -1,204 +1,131 @@
-const {
-    makeWASocket,
-    useMultiFileAuthState,
-    DisconnectReason,
-    fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore
+// index.js - Umethibitishwa na @djmacha255
+const { 
+    default: makeWASocket, 
+    useMultiFileAuthState, 
+    DisconnectReason, 
+    delay, 
+    fetchLatestBaileysVersion 
 } = require("@whiskeysockets/baileys");
-const express = require("express");
 const pino = require("pino");
+const { Boom } = require("@hapi/boom");
+const fs = require("fs");
 const path = require("path");
-const fs = require("fs-extra");
-const config = require("./config");
 
-const app = express();
+// =========================================================================
+// 📝 SEHEMU YA CONFIGURATION (WEKA NAMBA YA BOT HAPA)
+// =========================================================================
+const BOT_NUMBER = "255XXXXXXXXX"; // <-- Futa XXXXX na uweke namba ya bot na kodi ya nchi (Mfano: "255712345678")
+// =========================================================================
 
-// UTUNZI WA PORT: Inasoma port yoyote inayopewa na panel (Render, Pterodactyl, Koyeb, nk.)
-const PORT = process.env.PORT || process.env.SERVER_PORT || 3000;
+async function startBot() {
+    console.log("\n🚀 [SERVER STARTING] Mfumo unaanzishwa kwenye panel...");
+    
+    // 1. Kutengeneza na kusoma folder la Session
+    const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, "session"));
+    const { version } = await fetchLatestBaileysVersion();
 
-// Sehemu ya kimataifa ya kuhifadhia commands
-global.commands = new Map();
+    // 2. Cfg ya muunganisho wa WhatsApp
+    const client = makeWASocket({
+        auth: state,
+        logger: pino({ level: "silent" }), 
+        printQRInTerminal: false, // Imezimwa kabisa
+        version,
+        browser: ["Ubuntu", "Chrome", "20.0.04"] 
+    });
 
-// Express configuration kwa ajili ya Web Panel
-app.use(express.static(path.join(__dirname, "public")));
-app.use(express.json());
+    // 3. MFUMO WA PAIRING CODE (Kasi ya Panel - Non-Interactive)
+    if (!client.authState.creds.registered) {
+        console.log("\n📱 [PAIRING SYSTEM] Bot haijaunganishwa kwenye WhatsApp yoyote.");
+        
+        // Angalia kama mtumiaji amesahau kubadilisha namba ya mfano
+        if (!BOT_NUMBER || BOT_NUMBER.includes("XXXXXXXXX")) {
+            console.log("\n❌ ERROR: Tafadhali fungua index.js na uweke namba yako sahihi ya simu kwenye mstari wa 13!");
+            process.exit(1);
+        }
 
-// 1. MFUMO WA KUPAKIA COMMANDS KIOTOMATIKI (COMMAND HANDLER)
-function loadCommands() {
-    const commandsPath = path.join(__dirname, "commands");
-    if (!fs.existsSync(commandsPath)) {
-        fs.mkdirSync(commandsPath);
+        const cleanedNumber = BOT_NUMBER.replace(/[^0-9]/g, '');
+        console.log(`⏳ Inatengeneza Pairing Code kiotomatiki kwa ajili ya namba: ${cleanedNumber}...`);
+        await delay(3000);
+
+        try {
+            let code = await client.requestPairingCode(cleanedNumber);
+            code = code?.match(/.{1,4}/g)?.join("-") || code; 
+            
+            console.log("\n=============================================");
+            console.log(`🔑 APKA PAIRING CODE YAKO: \x1b[32m${code}\x1b[0m`);
+            console.log("=============================================\n");
+            console.log("👉 HATUA ZA KUFANYA KWENYE SIMU YAKO:");
+            console.log("1. Fungua WhatsApp ya namba hiyo.");
+            console.log("2. Nenda: Settings > Linked Devices.");
+            console.log("3. Bonyeza 'Link a Device' kisha chagua 'Link with phone number instead'.");
+            console.log(`4. Ingiza huu msimbo hapo juu: [\x1b[32m${code}\x1b[0m]`);
+            console.log("\n_Bot itasubiri hadi uingize msimbo huo kwenye simu..._");
+        } catch (error) {
+            console.error("❌ Hitilafu imetokea wakati wa kuomba code:", error);
+            process.exit(1);
+        }
     }
 
-    try {
-        const categories = fs.readdirSync(commandsPath);
-        for (const category of categories) {
-            const categoryPath = path.join(commandsPath, category);
-            
-            if (fs.lstatSync(categoryPath).isDirectory()) {
-                const commandFiles = fs.readdirSync(categoryPath).filter(file => file.endsWith(".js"));
-                
-                for (const file of commandFiles) {
-                    try {
-                        const command = require(path.join(categoryPath, file));
-                        if (command.name) {
-                            global.commands.set(command.name, command);
-                            if (command.aliases && Array.isArray(command.aliases)) {
-                                command.aliases.forEach(alias => global.commands.set(alias, command));
-                            }
-                        }
-                    } catch (error) {
-                        console.error(`[ERROR] Imeshindwa kupakia amri ${file}:`, error.message);
-                    }
+    // 4. KUPAKIA AMRI (COMMANDS LOADER)
+    global.commands = global.commands || new Map();
+    const commandsPath = path.join(__dirname, "commands");
+    
+    if (fs.existsSync(commandsPath)) {
+        const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+        for (const file of commandFiles) {
+            try {
+                const command = require(path.join(commandsPath, file));
+                if (command.name) {
+                    global.commands.set(command.name, command);
                 }
+            } catch (e) {
+                console.log(`⚠️ Kushindwa kupakia amri kutoka faili: ${file}`);
             }
         }
         console.log(`[SYSTEM] Jumla ya amri zilizopakiwa kwenye RAM: ${global.commands.size}`);
-    } catch (err) {
-        console.error("[SYSTEM ERROR] Kushindwa kusoma folda la commands:", err.message);
-    }
-}
-
-// 2. INJINI KUU YA WHATSAPP & WEB PAIRING
-async function startMachaBot(targetNumber = null, res = null) {
-    const sessionPath = path.join(__dirname, "temp_sessions");
-    
-    // Hakikisha folda la session lipo
-    await fs.ensureDir(sessionPath);
-    
-    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-    const { version } = await fetchLatestBaileysVersion();
-
-    const sock = makeWASocket({
-        version,
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }))
-        },
-        printQRInTerminal: !targetNumber, // Kama hakuna namba, itaprint QR terminal kwa usalama wa VPS
-        logger: pino({ level: "fatal" }),
-        browser: ["MACHA-AI", "Chrome", "1.0.0"]
-    });
-
-    // Kushughulikia Ombi la Pairing kutoka kwenye Web Panel
-    if (targetNumber && !sock.authState.creds.registered) {
-        setTimeout(async () => {
-            try {
-                let code = await sock.requestPairingCode(targetNumber);
-                code = code?.match(/.{1,4}/g)?.join("-") || code;
-                if (res && !res.headersSent) {
-                    return res.json({ code });
-                }
-            } catch (err) {
-                console.error("[PAIRING ERROR]", err);
-                if (res && !res.headersSent) {
-                    return res.status(500).json({ error: "Muda umeisha au imeshindwa kuzalisha kodi." });
-                }
-            }
-        }, 3000);
     }
 
-    // Kufuatilia Muunganisho (Connection State)
-    sock.ev.on("connection.update", async (update) => {
+    // 5. KUNASA HALI YA MUUNGANISHO
+    client.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect } = update;
-        
+
         if (connection === "close") {
-            const reason = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = reason !== DisconnectReason.loggedOut;
-            
-            console.log(`[CONNECTION] Muunganisho umefungwa (Reason Code: ${reason}). Reconnecting: ${shouldReconnect}`);
-            
-            if (shouldReconnect) {
-                startMachaBot(); // Kuji-reconnect kiotomatiki bila kufunga panel
+            const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
+            console.log(`[CONNECTION] Muunganisho umefungwa. Reason Code: ${reason}`);
+
+            if (reason === DisconnectReason.restartRequired || reason === 408) {
+                console.log("⏳ Inajaribu kuwaka upya yenyewe...");
+                await delay(5000); 
+                startBot();
+            } else if (reason === DisconnectReason.loggedOut) {
+                console.log("❌ Bot imetolewa (Logged Out). Inafuta session ya zamani...");
+                if (fs.existsSync(path.join(__dirname, "session"))) {
+                    fs.rmSync(path.join(__dirname, "session"), { recursive: true, force: true });
+                }
+                process.exit(1);
+            } else {
+                console.log(`⚠️ Muunganisho umefungwa (Code: ${reason}). Inajizima yenyewe ili isilete loop.`);
+                process.exit(1);
             }
         } else if (connection === "open") {
-            console.log(`[ONLINE] MACHA-AI v${config.version} Imewaka kikamilifu! Mmiliki: ${config.ownerName}`);
-            try {
-                await sock.sendMessage(config.ownerNumber + "@s.whatsapp.net", { 
-                    text: `*MACHA-AI ULTRA-CORE v${config.version} IPO ONLINE!* 🎧\n\nMfumo umewashwa kutoka kwenye Cloud Panel na upo tayari.` 
-                });
-            } catch (e) {
-                console.log("[SYSTEM] Ujumbe wa kuanza haukutumwa, namba ya owner haina usajili sahihi au bot ni mpya.");
-            }
+            console.log("\n=============================================");
+            console.log("✅ [SUCCESS] Bot imeunganishwa kikamilifu kwenye WhatsApp!");
+            console.log("=============================================\n");
         }
     });
 
-    sock.ev.on("creds.update", saveCreds);
+    client.ev.on("creds.update", saveCreds);
 
-    // MSOMAJI WA UJUMBE NA EXECUTER WA COMMANDS
-    sock.ev.on("messages.upsert", async (chatUpdate) => {
+    // 6. JUMBE HANDLER LINK
+    client.ev.on("messages.upsert", async (chatUpdate) => {
         try {
-            const mek = chatUpdate.messages[0];
-            if (!mek.message) return;
-            
-            // Auto Read Status
-            if (mek.key && mek.key.remoteJid === "status@broadcast") {
-                if (config.autoReadStatus === "true") await sock.readMessages([mek.key]);
-                return;
-            }
-
-            const from = mek.key.remoteJid;
-            const type = Object.keys(mek.message)[0];
-            
-            let body = (type === "conversation") ? mek.message.conversation : 
-                       (type === "extendedTextMessage") ? mek.message.extendedTextMessage.text : 
-                       (type === "imageMessage") ? mek.message.imageMessage.caption : 
-                       (type === "videoMessage") ? mek.message.videoMessage.caption : "";
-
-            const isCmd = body.startsWith(config.prefix);
-            const commandName = isCmd ? body.slice(config.prefix.length).trim().split(/ +/).shift().toLowerCase() : "";
-            const args = body.trim().split(/ +/).slice(1);
-            const text = args.join(" ");
-            const isOwner = mek.key.fromMe || from.startsWith(config.ownerNumber);
-            
-            if (isCmd) {
-                if (config.publicMode === "false" && !isOwner) return;
-
-                const cmd = global.commands.get(commandName);
-                if (cmd) {
-                    await cmd.execute(sock, mek, from, args, text, isOwner);
-                }
-            }
-        } catch (e) {
-            console.error("[ERROR IN MESSAGES UPSERT]", e);
-        }
-    });
-
-    // Anti-Call Block
-    sock.ev.on("call", async (callArr) => {
-        if (config.antiCallBlock === "true") {
-            for (const call of callArr) {
-                if (call.status === "offer") {
-                    await sock.sendMessage(call.from, { text: "⚠️ *Mifumo ya MACHA-AI haipokei simu.* Umepigwa block kiotomatiki." });
-                    await sock.updateBlockStatus(call.from, "block");
-                }
-            }
+            const m = chatUpdate.messages[0];
+            if (!m.message) return;
+            // Hapa itasoma message logic yako ya kawaida
+        } catch (err) {
+            console.error("Error in message upsert:", err);
         }
     });
 }
 
-// 3. API ROUTE KWA AJILI YA PAIRING PANEL
-app.get("/api/pair", async (req, res) => {
-    let num = req.query.number;
-    if (!num) return res.status(400).json({ error: "Namba ya simu inahitajika!" });
-    num = num.replace(/[^0-9]/g, "");
-    console.log(`[WEB API] Ombi la kodi ya pairing kwa namba: ${num}`);
-    await startMachaBot(num, res);
-});
-
-// 4. MIFUMO YA ULINZI (ANTI-CRASH LOGIC) - HIZI ZINAZUIA SEVA ISIFE PANEL IKIWA LIVE
-process.on("uncaughtException", (err) => {
-    console.error("[CRITICAL ERROR - UNCAUGHT EXCEPTION]:", err.message);
-    // Bot haizimi, inatupa log tu na kuendelea kupiga kazi
-});
-
-process.on("unhandledRejection", (reason, promise) => {
-    console.error("[CRITICAL ERROR - UNHANDLED REJECTION]: At:", promise, "Reason:", reason);
-});
-
-// 5. KUWASHA SEVA RASMI
-app.listen(PORT, () => {
-    console.log(`[SERVER RUNNING] Mfumo umewaka kwenye Port: ${PORT}`);
-    loadCommands();
-    startMachaBot(); // Inawasha background engine
-});
+startBot().catch(err => console.error("Critical Error on startup:", err));
