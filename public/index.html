@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="sw">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MACHA-AI v4.0.0 - Web Pairing Panel</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-family/6.0.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Nembo na Kichwa cha Habari -->
+        <div class="header">
+            <div class="logo-area">
+                <i class="fas fa-compact-disc fa-spin dj-icon"></i>
+                <h1>MACHA-AI <span>SUPER BOT</span></h1>
+            </div>
+            <p class="subtitle">Advanced WhatsApp Automation Platform by @djmacha255</p>
+        </div>
+
+        <!-- Sehemu Kuu ya Kazi -->
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-link"></i> Kuunganisha Namba (Pairing Suite)
+            </div>
+            
+            <div class="card-body">
+                <p class="instruction">Ingiza namba yako ya simu kuanza na kodi ya nchi (Mfano: <b>2557XXXXXXXX</b>) ili upate kodi ya kuunganisha kwenye WhatsApp yako.</p>
+                
+                <div class="input-group">
+                    <span class="input-icon"><i class="fas fa-phone-alt"></i></span>
+                    <input type="number" id="phoneNumber" placeholder="255700000000" required>
+                </div>
+
+                <button id="getButton" onclick="getPairingCode()">
+                    <i class="fas fa-bolt"></i> Zalisha Kodi (Get Code)
+                </button>
+
+                <!-- Sehemu ya kuonyesha matokeo -->
+                <div id="loading" class="loading-spinner hidden">
+                    <div class="spinner"></div>
+                    <p>Inatengeneza handshake salama na WhatsApp...</p>
+                </div>
+
+                <div id="codeDisplay" class="code-box hidden">
+                    <p>Kodi Yako Hapa:</p>
+                    <div class="code-text" id="pairCode">XXXX-XXXX</div>
+                    <button class="copy-btn" onclick="copyCode()">
+                        <i class="fas fa-copy"></i> Copy Code
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer ya kitalamu -->
+        <div class="footer">
+            <p>Powered by <span>@djmacha255</span> &copy; 2026 All Rights Reserved.</p>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
